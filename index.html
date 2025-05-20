@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blob Parkour</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a1a2e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: Arial, sans-serif;
+        }
+        
+        #gameCanvas {
+            border: 2px solid #4d4d8f;
+            background-color: #0f0f1a;
+        }
+        
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 18px;
+            padding: 10px;
+            background-color: rgba(0, 0, 0, 0.5);
+            border-radius: 5px;
+        }
+        
+        #startScreen, #levelComplete, #gameOver {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(0, 0, 0, 0.7);
+        }
+        
+        #levelComplete, #gameOver {
+            display: none;
+        }
+        
+        h1 {
+            color: #8be9fd;
+            font-size: 48px;
+            margin-bottom: 20px;
+            text-shadow: 0 0 10px #50fa7b;
+        }
+        
+        p {
+            color: #f8f8f2;
+            font-size: 24px;
+            margin-bottom: 30px;
+            text-align: center;
+            max-width: 600px;
+        }
+        
+        button {
+            background-color: #bd93f9;
+            color: #282a36;
+            border: none;
+            padding: 15px 30px;
+            font-size: 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            background-color: #ff79c6;
+            transform: scale(1.05);
+        }
+        
+        #controls {
+            color: #f8f8f2;
+            font-size: 18px;
+            margin-top: 20px;
+            background-color: rgba(40, 42, 54, 0.8);
+            padding: 15px;
+            border-radius: 5px;
+            max-width: 400px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    
+    <div id="ui">
+        <div>Level: <span id="levelDisplay">1</span></div>
+        <div>Energy: <span id="energyDisplay">100</span></div>
+    </div>
+    
+    <div id="startScreen">
+        <h1>BLOB PARKOUR</h1>
+        <p>Help the blob navigate through challenging platforms using jumps, glides, and thrusters!</p>
+        <button id="startButton">START GAME</button>
+        <div id="controls">
+            ← → or A/D : Move left/right<br>
+            SPACE or W/↑ : Jump<br>
+            SHIFT or S : Glide (hold)<br>
+            Z or J : Activate thrusters (costs energy)<br>
+            R : Restart level
+        </div>
+    </div>
+    
+    <div id="levelComplete">
+        <h1>LEVEL COMPLETE!</h1>
+        <p>Great job! You've completed level <span id="completedLevel">1</span>.</p>
+        <button id="nextLevelButton">NEXT LEVEL</button>
+    </div>
+    
+    <div id="gameOver">
+        <h1>GAME OVER</h1>
+        <p>Your blob has fallen too far! Try again.</p>
+        <button id="restartButton">RESTART GAME</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // UI Elements
+        const startScreen = document.getElementById('startScreen');
+        const levelComplete = document.getElementById('levelComplete');
+        const gameOver = document.getElementById('gameOver');
+        const startButton = document.getElementById('startButton');
+        const nextLevelButton = document.getElementById('nextLevelButton');
+        const restartButton = document.getElementById('restartButton');
+        const levelDisplay = document.getElementById('levelDisplay');
+        const completedLevelDisplay = document.getElementById('completedLevel');
+        const energyDisplay = document.getElementById('energyDisplay');
+        
+        // Resize canvas to fit window
+        function resizeCanvas() {
+            canvas.width = Math.min(window.innerWidth - 20, 800);
+            canvas.height = Math.min(window.innerHeight - 20, 600);
+        }
+        
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        
+        let gameRunning = false;
+        let currentLevel = 1;
+        let platforms = [];
+        let finishPlatform = null;
+        let backgroundParticles = [];
+        
+        const blob = {
+            x: 100,
+            y: 300,
+            width: 40,
+            height: 40,
+            velocityX: 0,
+            velocityY: 0,
+            speed: 5,
+            jumpPower: -12,
+            gravity: 0.45,
+            friction: 0.89,
+            grounded: false,
+            gliding: false,
+            points: [], // For blob shape
+            baseRadius: 20,
+            wobbleAmount: 3,
+            wobbleSpeed: 0.1,
+            wobbleOffset: 0,
+            color: '#50fa7b',
+            energy: 100,
+            thrusterParticles: [],
+            glideParticles: []
+        };
+        
+        // Input handling
+        const keys = {};
+        
+        window.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            
+            // Also handle arrow keys
+            if (e.key === 'ArrowLeft') keys['arrowleft'] = true;
+            if (e.key === 'ArrowRight') keys['arrowright'] = true;
+            if (e.key === 'ArrowUp') keys['arrowup'] = true;
+            if (e.key === 'ArrowDown') keys['arrowdown'] = true;
+            if (e.key === 'Shift') keys['shift'] = true;
+            
+            // Prevent spacebar from scrolling the page
+            if (e.key === ' ' && gameRunning) {
+                e.preventDefault();
+            }
+            
+            // Restart level with R key
+            if (e.key === 'r' && gameRunning) {
+                restartLevel();
+            }
+        });
+        
+        window.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+            
+            // Also handle arrow keys
+            if (e.key === 'ArrowLeft') keys['arrowleft'] = false;
+            if (e.key === 'ArrowRight') keys['arrowright'] = false;
+            if (e.key === 'ArrowUp') keys['arrowup'] = false;
+            if (e.key === 'ArrowDown') keys['arrowdown'] = false;
+            if (e.key === 'Shift') keys['shift'] = false;
+        });
+        
+        function generateBlobPoints() {
+            blob.points = [];
+            const numPoints = 20;
+            
+            let stretchX = 1;
+            let stretchY = 1;
+            
+            if (blob.gliding) {
+                stretchX = 1.3;  // Stretch horizontally during gliding
+                stretchY = 0.7;  // Flatten vertically during gliding
+            }
+            
+            for (let i = 0; i < numPoints; i++) {
+                const angle = (i / numPoints) * Math.PI * 2;
+                const wobblePhase = blob.wobbleOffset + i * blob.wobbleSpeed;
+                const wobble = blob.wobbleAmount * Math.sin(wobblePhase);
+                
+                // Apply directional movement to wobble
+                const velocityInfluence = Math.abs(blob.velocityX) * 0.1;
+                const extraWobble = Math.sin(wobblePhase + blob.velocityX * 0.05) * velocityInfluence;
+                
+                const radius = blob.baseRadius + wobble + extraWobble;
+                const x = Math.cos(angle) * radius * stretchX;
+                const y = Math.sin(angle) * radius * stretchY;
+                
+                blob.points.push({ x, y });
+            }
+            
+            blob.wobbleOffset += 0.1;
+        }
+        
+        function drawBlob() {
+            generateBlobPoints();
+            
+            ctx.save();
+            ctx.translate(blob.x, blob.y);
+            
+            // Draw shadow
+            ctx.beginPath();
+            ctx.moveTo(blob.points[0].x, blob.points[0].y + 5);
+            for (let i = 1; i < blob.points.length; i++) {
+                ctx.lineTo(blob.points[i].x, blob.points[i].y + 5);
+            }
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fill();
+            
+            // Draw blob body
+            ctx.beginPath();
+            ctx.moveTo(blob.points[0].x, blob.points[0].y);
+            for (let i = 1; i < blob.points.length; i++) {
+                ctx.lineTo(blob.points[i].x, blob.points[i].y);
+            }
+            ctx.closePath();
+            
+            // Create gradient for blob
+            const gradient = ctx.createRadialGradient(0, 0, 5, 0, 0, blob.baseRadius);
+            gradient.addColorStop(0, '#8be9fd');
+            gradient.addColorStop(1, blob.color);
+            
+            ctx.fillStyle = gradient;
+            ctx.fill();
+            
+            // Draw eyes
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(-7, -5, 6, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.beginPath();
+            ctx.arc(7, -5, 6, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Draw pupils
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(-7, -5, 3, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.beginPath();
+            ctx.arc(7, -5, 3, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.restore();
+        }
+        
+        function createThrusterParticle() {
+            if (blob.energy <= 0) return;
+            
+            for (let i = 0; i < 3; i++) {
+                blob.thrusterParticles.push({
+                    x: blob.x + (Math.random() - 0.5) * blob.baseRadius,
+                    y: blob.y + blob.baseRadius * 0.7,
+                    size: Math.random() * 8 + 5,
+                    speedX: (Math.random() - 0.5) * 3,
+                    speedY: Math.random() * 4 + 2,
+                    life: 1.0
+                });
+            }
+            
+            blob.energy -= 0.5;
+            if (blob.energy < 0) blob.energy = 0;
+            energyDisplay.textContent = Math.floor(blob.energy);
+        }
+        
+        function createGlideParticle() {
+            if (!blob.gliding) return;
+            
+            for (let i = 0; i < 2; i++) {
+                blob.glideParticles.push({
+                    x: blob.x + (Math.random() - 0.5) * blob.baseRadius * 2,
+                    y: blob.y + blob.baseRadius * 0.7,
+                    size: Math.random() * 5 + 2,
+                    speedX: (Math.random() - 0.5) * 2,
+                    speedY: Math.random() * 2 + 0.5,
+                    life: 1.0
+                });
+            }
+        }
+        
+        // Update thruster particles
+        function updateThrusterParticles() {
+            for (let i = blob.thrusterParticles.length - 1; i >= 0; i--) {
+                const p = blob.thrusterParticles[i];
+                p.x += p.speedX;
+                p.y += p.speedY;
+                p.life -= 0.03;
+                
+                if (p.life <= 0) {
+                    blob.thrusterParticles.splice(i, 1);
+                }
+            }
+        }
+        
+        // Update glide particles
+        function updateGlideParticles() {
+            for (let i = blob.glideParticles.length - 1; i >= 0; i--) {
+                const p = blob.glideParticles[i];
+                p.x += p.speedX;
+                p.y += p.speedY;
+                p.life -= 0.05;
+                
+                if (p.life <= 0) {
+                    blob.glideParticles.splice(i, 1);
+                }
+            }
+        }
+        
+        // Draw particles
+        function drawParticles() {
+            // Draw thruster particles
+            for (const p of blob.thrusterParticles) {
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = `rgb(255, ${Math.floor(p.life * 150)}, 50)`;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // Draw glide particles
+            for (const p of blob.glideParticles) {
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = `rgb(200, 200, ${Math.floor(p.life * 255)})`;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            ctx.globalAlpha = 1;
+        }
+        
+        function createBackgroundParticles() {
+            backgroundParticles = [];
+            const count = 50;
+            
+            for (let i = 0; i < count; i++) {
+                backgroundParticles.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    size: Math.random() * 3 + 1,
+                    speedX: (Math.random() - 0.5) * 0.5,
+                    speedY: (Math.random() - 0.5) * 0.5
+                });
+            }
+        }
+        
+        function updateBackgroundParticles() {
+            for (const p of backgroundParticles) {
+                p.x += p.speedX;
+                p.y += p.speedY;
+                
+                // Wrap around edges
+                if (p.x < 0) p.x = canvas.width;
+                if (p.x > canvas.width) p.x = 0;
+                if (p.y < 0) p.y = canvas.height;
+                if (p.y > canvas.height) p.y = 0;
+            }
+        }
+        
+        function drawBackgroundParticles() {
+            ctx.fillStyle = '#bd93f9';
+            for (const p of backgroundParticles) {
+                ctx.globalAlpha = 0.3;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        }
+        
+        function generateLevel(level) {
+            platforms = [];
+            
+            const screenWidth = canvas.width;
+            const screenHeight = canvas.height;
+            
+            let platformCount;
+            let minWidth, maxWidth;
+            
+            switch (level) {
+                case 1:
+                    platformCount = 8;
+                    minWidth = 80;
+                    maxWidth = 150;
+                    break;
+                case 2:
+                    platformCount = 10;
+                    minWidth = 70;
+                    maxWidth = 130;
+                    break;
+                case 3:
+                    platformCount = 12;
+                    minWidth = 60;
+                    maxWidth = 120;
+                    break;
+                default:
+                    platformCount = 8 + level;
+                    minWidth = Math.max(40, 80 - level * 3);
+                    maxWidth = Math.max(80, 150 - level * 5);
+            }
+            
+            // Ground platform at the bottom
+            platforms.push({
+                x: 0,
+                y: screenHeight - 20,
+                width: screenWidth,
+                height: 20,
+                color: '#6272a4',
+                isBase: true
+            });
+            
+            for (let i = 0; i < platformCount; i++) {
+                const width = minWidth + Math.random() * (maxWidth - minWidth);
+                
+                const x = Math.random() * (screenWidth - width);
+                
+                let yMin, yMax;
+                
+                if (i < platformCount / 3) {
+                    // Lower third of platforms
+                    yMin = screenHeight * 0.6;
+                    yMax = screenHeight * 0.8;
+                } else if (i < platformCount * 2/3) {
+                    // Middle third of platforms
+                    yMin = screenHeight * 0.3;
+                    yMax = screenHeight * 0.6;
+                } else {
+                    // Upper third of platforms
+                    yMin = screenHeight * 0.1;
+                    yMax = screenHeight * 0.3;
+                }
+                
+                const y = yMin + Math.random() * (yMax - yMin);
+                
+                let color = '#6272a4';
+                let isMoving = false;
+                let speedX = 0;
+                let speedY = 0;
+                let amplitude = 0;
+                let baseX = x;
+                let baseY = y;
+                
+                if (level > 1 && i % 4 === 0) {
+                    isMoving = true;
+                    if (i % 2 === 0) {
+                        // Horizontal moving
+                        speedX = 1 + (level * 0.2);
+                        amplitude = Math.min(100, (screenWidth - width) / 2) * 0.8;
+                        color = '#ff79c6';
+                    } else {
+                        // Vertical moving
+                        speedY = 1 + (level * 0.1);
+                        amplitude = 50;
+                        color = '#8be9fd';
+                    }
+                }
+                
+                platforms.push({
+                    x,
+                    y,
+                    width,
+                    height: 15,
+                    color,
+                    isMoving,
+                    speedX,
+                    speedY,
+                    amplitude,
+                    baseX,
+                    baseY,
+                    angle: Math.random() * Math.PI * 2 // Random starting angle for movement
+                });
+            }
+            
+            // Add finish platform at the top
+            finishPlatform = {
+                x: screenWidth / 2 - 75,
+                y: 50,
+                width: 150,
+                height: 15,
+                color: '#f1fa8c',
+                isFinish: true
+            };
+            
+            platforms.push(finishPlatform);
+            
+            blob.x = screenWidth / 2;
+            blob.y = screenHeight - 60;
+            blob.velocityX = 0;
+            blob.velocityY = 0;
+            blob.energy = 100;
+            energyDisplay.textContent = blob.energy;
+        }
+        
+        function checkCollision(platform) {
+            const collisionRadius = blob.baseRadius * 0.8;
+            
+            const blobLeft = blob.x - collisionRadius;
+            const blobRight = blob.x + collisionRadius;
+            const blobTop = blob.y - collisionRadius;
+            const blobBottom = blob.y + collisionRadius;
+            
+            const platLeft = platform.x;
+            const platRight = platform.x + platform.width;
+            const platTop = platform.y;
+            const platBottom = platform.y + platform.height;
+            
+            return blobRight > platLeft && 
+                   blobLeft < platRight && 
+                   blobBottom > platTop && 
+                   blobTop < platBottom;
+        }
+        
+        function updateBlob() {
+            // Apply controls
+            if (keys['arrowleft'] || keys['a']||keys['A']) {
+                blob.velocityX -= blob.speed * 0.3;
+                blob.color = '#50fa7b'; // Normal color
+            }
+            
+            if (keys['arrowright'] || keys['d']||keys['D']) {
+                blob.velocityX += blob.speed * 0.1;
+                blob.color = '#50fa7b'; // Normal color
+            }
+            
+            // Jump
+            if ((keys[' '] || keys['arrowup'] || keys['w']) && blob.grounded) {
+                blob.velocityY = blob.jumpPower;
+                blob.grounded = false;
+                blob.color = '#ff79c6'; // Jump color
+            }
+            
+             blob.gliding = (keys['shift'] || keys['s']||keys['arrowdown']) && !blob.grounded && blob.velocityY > 0;
+            
+            if (blob.gliding) {
+                blob.velocityY *= 0.72;
+                blob.velocityY = Math.max(blob.velocityY, 1); // Set minimum fall speed
+                blob.color = '#8be9fd'; // Glide color
+                createGlideParticle();
+            }
+
+            
+            if ((keys['z'] || keys['j']|| keys['q']) && blob.energy > 0) {
+                blob.velocityY -= 0.7; // Stronger thrust upward
+                blob.color = '#ff5555'; // Thruster color
+                createThrusterParticle();
+            } else {
+                if (blob.grounded && blob.energy < 100) {
+                    blob.energy += 0.2;
+                    energyDisplay.textContent = Math.floor(blob.energy);
+                }
+            }
+            
+            // Apply gravity
+            blob.velocityY += blob.gravity;
+            
+            // Apply friction
+            blob.velocityX *= blob.friction;
+            if (Math.abs(blob.velocityX) < 0.1) {
+                blob.velocityX = 0;
+            }
+            blob.velocityY *= blob.friction;
+
+            
+            // Update position
+            blob.x += blob.velocityX;
+            blob.y += blob.velocityY;
+            
+            // Check boundaries (keep blob within screen)
+            if (blob.x - blob.baseRadius < 0) {
+                blob.x = blob.baseRadius;
+                blob.velocityX = 0;
+            } else if (blob.x + blob.baseRadius > canvas.width) {
+                blob.x = canvas.width - blob.baseRadius;
+                blob.velocityX = 0;
+            }
+            
+            // Reset grounded state
+            blob.grounded = false;
+            
+            // Check platform collisions
+            for (const platform of platforms) {
+                if (checkCollision(platform)) {
+                    // Top collision - landing on platform
+                    if (blob.velocityY > 0 && 
+                        blob.y < platform.y) {
+                        blob.y = platform.y - blob.baseRadius;
+                        blob.velocityY = 0;
+                        blob.grounded = true;
+                        
+                        // Check if this is the finish platform
+                        if (platform.isFinish) {
+                            completeLevel();
+                        }
+                    }
+                    // Bottom collision
+                    else if (blob.velocityY < 0 && 
+                             blob.y > platform.y + platform.height) {
+                        blob.y = platform.y + platform.height + blob.baseRadius;
+                        blob.velocityY = 0;
+                    }
+                    // Left collision
+                    else if (blob.velocityX > 0 && 
+                             blob.x < platform.x) {
+                        blob.x = platform.x - blob.baseRadius;
+                        blob.velocityX = 0;
+                    }
+                    // Right collision
+                    else if (blob.velocityX < 0 && 
+                             blob.x > platform.x + platform.width) {
+                        blob.x = platform.x + platform.width + blob.baseRadius;
+                        blob.velocityX = 0;
+                    }
+                }
+            }
+            
+            if (blob.y > canvas.height + 100) {
+                gameOver.style.display = 'flex';
+                gameRunning = false;
+            }
+        }
+        
+        function updatePlatforms() {
+            for (const platform of platforms) {
+                if (platform.isMoving) {
+                    platform.angle += 0.02;
+                    
+                    if (platform.speedX > 0) {
+                        // Horizontal movement
+                        platform.x = platform.baseX + Math.sin(platform.angle) * platform.amplitude;
+                    }
+                    
+                    if (platform.speedY > 0) {
+                        // Vertical movement
+                        platform.y = platform.baseY + Math.sin(platform.angle) * platform.amplitude;
+                    }
+                }
+            }
+        }
+        
+        function completeLevel() {
+            gameRunning = false;
+            levelComplete.style.display = 'flex';
+            completedLevelDisplay.textContent = currentLevel;
+        }
+        
+        function restartLevel() {
+            generateLevel(currentLevel);
+        }
+        
+        // Draw platforms
+        function drawPlatforms() {
+            for (const platform of platforms) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                ctx.fillRect(platform.x + 5, platform.y + 5, platform.width, platform.height);
+                
+                ctx.fillStyle = platform.color;
+                ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+                
+                // Draw finish flag for finish platform
+                if (platform.isFinish) {
+                    // Flag pole
+                    ctx.fillStyle = '#f8f8f2';
+                    ctx.fillRect(platform.x + platform.width/2 - 2, platform.y - 50, 4, 50);
+                    
+                    // Flag
+                    ctx.fillStyle = '#ff5555';
+                    ctx.beginPath();
+                    ctx.moveTo(platform.x + platform.width/2 + 2, platform.y - 50);
+                    ctx.lineTo(platform.x + platform.width/2 + 22, platform.y - 40);
+                    ctx.lineTo(platform.x + platform.width/2 + 2, platform.y - 30);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            }
+        }
+        
+        
+        function updateCamera() {
+            
+        }
+        
+        
+        function gameLoop() {
+            if (!gameRunning) return;
+            
+            ctx.fillStyle = '#0f0f1a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            drawBackgroundParticles();
+            
+            updateBlob();
+            updatePlatforms();
+            updateThrusterParticles();
+            updateGlideParticles();
+            updateBackgroundParticles();
+            
+            
+            drawPlatforms();
+            drawBlob();
+            drawParticles();
+            
+           
+            requestAnimationFrame(gameLoop);
+        }
+        
+        function initGame() {
+            createBackgroundParticles();
+            generateLevel(currentLevel);
+            levelDisplay.textContent = currentLevel;
+            gameRunning = true;
+            gameLoop();
+        }
+        
+        startButton.addEventListener('click', () => {
+            startScreen.style.display = 'none';
+            initGame();
+        });
+        
+        nextLevelButton.addEventListener('click', () => {
+            currentLevel++;
+            levelDisplay.textContent = currentLevel;
+            levelComplete.style.display = 'none';
+            generateLevel(currentLevel);
+            gameRunning = true;
+            gameLoop();
+        });
+        
+        restartButton.addEventListener('click', () => {
+            currentLevel = 1;
+            levelDisplay.textContent = currentLevel;
+            gameOver.style.display = 'none';
+            generateLevel(currentLevel);
+            gameRunning = true;
+            gameLoop();
+        });
+    </script>
+</body>
+</html>
